@@ -9,12 +9,12 @@ const client = new Client({
     ]
 });
 
-// Replace these with your actual channel IDs
+// ====== CONFIG ======
 const CAMP_LOG_CHANNEL_ID = '1410252298650783744';
 const UPDATE_CHANNEL_ID = '1411305143118336120';
-
-// File to store data
+const BOT_TOKEN = 'YOUR_BOT_TOKEN';
 const DATA_FILE = './membersData.json';
+// ===================
 
 // Load existing data if available
 let membersData = {};
@@ -27,12 +27,12 @@ if (fs.existsSync(DATA_FILE)) {
     }
 }
 
-// Parse incoming messages
+// Parse incoming message safely
 function parseMessage(message) {
     try {
         const content = message.content;
+        if (!content) return null;
 
-        // Extract username from the message (works for webhook messages too)
         const discordMatch = content.match(/Discord: @([^\s]+)/);
         if (!discordMatch) return null;
         const username = discordMatch[1];
@@ -43,23 +43,17 @@ function parseMessage(message) {
 
         // Materials
         const matMatch = content.match(/Materials added: ([\d.]+)/);
-        if (matMatch) {
-            membersData[username].materials += parseFloat(matMatch[1]);
-        }
+        if (matMatch) membersData[username].materials += parseFloat(matMatch[1]);
 
         // Withdraw
         const withdrawMatch = content.match(/Withdrew from clan ledger, \$([\d.]+)/);
-        if (withdrawMatch) {
-            membersData[username].withdrawn += parseFloat(withdrawMatch[1]);
-        }
+        if (withdrawMatch) membersData[username].withdrawn += parseFloat(withdrawMatch[1]);
 
         // Delivery / Sale
         const deliveryMatch = content.match(/Made a Sale Of [\d]+ Of Stock For \$([\d.]+)/);
-        if (deliveryMatch) {
-            membersData[username].delivery += parseFloat(deliveryMatch[1]);
-        }
+        if (deliveryMatch) membersData[username].delivery += parseFloat(deliveryMatch[1]);
 
-        // Save after every update
+        // Save updated data
         fs.writeFileSync(DATA_FILE, JSON.stringify(membersData, null, 2));
 
         return true;
@@ -69,7 +63,7 @@ function parseMessage(message) {
     }
 }
 
-// Send a full update to the update channel
+// Send full update
 async function sendUpdate(channel) {
     if (!channel) return;
 
@@ -79,10 +73,7 @@ async function sendUpdate(channel) {
         updateMessage += `@${user}\n  Materials: ${data.materials}\n  Withdrawn: $${data.withdrawn.toFixed(2)}\n  Delivery: $${data.delivery.toFixed(2)}\n\n`;
     }
 
-    // Discord message limit
-    if (updateMessage.length > 2000) {
-        updateMessage = updateMessage.slice(0, 1997) + '...';
-    }
+    if (updateMessage.length > 2000) updateMessage = updateMessage.slice(0, 1997) + '...';
 
     try {
         await channel.send(updateMessage);
@@ -91,16 +82,16 @@ async function sendUpdate(channel) {
     }
 }
 
-// Real-time listener
+// Listen for new messages (real-time)
 client.on('messageCreate', async message => {
-    // Skip the bot itself only
+    // Ignore the bot itself
     if (message.author?.id === client.user.id) return;
 
     // Reset command
     if (message.content.toLowerCase() === '!reset') {
         membersData = {};
         fs.writeFileSync(DATA_FILE, JSON.stringify(membersData, null, 2));
-        const updateChannel = await client.channels.fetch(UPDATE_CHANNEL_ID);
+        const updateChannel = await client.channels.fetch(UPDATE_CHANNEL_ID).catch(() => null);
         if (updateChannel) updateChannel.send('All data has been reset!');
         return;
     }
@@ -109,15 +100,16 @@ client.on('messageCreate', async message => {
     if (message.channel.id !== CAMP_LOG_CHANNEL_ID) return;
 
     const parsed = parseMessage(message);
-    if (!parsed) return;
+    if (!parsed) return; // skip malformed messages
 
-    const updateChannel = await client.channels.fetch(UPDATE_CHANNEL_ID);
+    const updateChannel = await client.channels.fetch(UPDATE_CHANNEL_ID).catch(() => null);
     if (updateChannel) sendUpdate(updateChannel);
 });
 
+// Ready event
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
 });
 
+// Login
 client.login(process.env.DISCORD_TOKEN);
-

@@ -1,100 +1,100 @@
-require("dotenv").config();
-const { Client, GatewayIntentBits } = require("discord.js");
-const fs = require("fs");
+const { Client, GatewayIntentBits } = require('discord.js');
+const fs = require('fs');
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
-});
+// IDs for your channels
+const CAMP_LOG_CHANNEL_ID = '1410252298650783744';
+const UPDATE_CHANNEL_ID = '1411305143118336120';
 
-// Channel ID where the webhook posts logs
-const WEBHOOK_CHANNEL_ID = "1410252298650783744";
+// Data storage
+let membersData = {};
 
-// Load existing data
-let players = {};
-if (fs.existsSync("players.json")) {
-  try {
-    players = JSON.parse(fs.readFileSync("players.json", "utf8"));
-  } catch {
-    players = {};
-  }
+// load data from file if exists
+const DATA_FILE = './membersData.json';
+if (fs.existsSync(DATA_FILE)) {
+    membersData = JSON.parse(fs.readFileSync(DATA_FILE));
 }
 
-function getPlayerName(text) {
-  const m = text.match(/Discord:\s*@(.+?)\s+\d{5,}/i);
-  if (m) return m[1].trim();
+// Helper function to parse message
+function parseMessage(message) {
+    try {
+        const content = message.content;
 
-  const first = text.split("\n")[0].trim();
-  if (!/^Clan Name:/i.test(first)) return first;
+        // Get discord username
+        const discordMatch = content.match(/Discord: @([^\s]+)/);
+        if (!discordMatch) return null;
+        const username = discordMatch[1];
 
-  return "Unknown";
+        if (!membersData[username]) {
+            membersData[username] = { materials: 0, withdrawn: 0, delivery: 0 };
+        }
+
+        // Materials
+        const matMatch = content.match(/Materials added: ([\d.]+)/);
+        if (matMatch) {
+            membersData[username].materials += parseFloat(matMatch[1]);
+        }
+
+        // Withdraw
+        const withdrawMatch = content.match(/Withdrew from clan ledger, \$([\d.]+)/);
+        if (withdrawMatch) {
+            membersData[username].withdrawn += parseFloat(withdrawMatch[1]);
+        }
+
+        // Delivery / Sale
+        const deliveryMatch = content.match(/Made a Sale Of [\d]+ Of Stock For \$([\d.]+)/);
+        if (deliveryMatch) {
+            membersData[username].delivery += parseFloat(deliveryMatch[1]);
+        }
+
+        // Save after update
+        fs.writeFileSync(DATA_FILE, JSON.stringify(membersData, null, 2));
+
+        return true;
+    } catch (err) {
+        console.error('Error parsing message:', err);
+        return null;
+    }
 }
 
-function parseMoney(text) {
-  const m = text.match(/\$([\d,]+(?:\.\d+)?)/);
-  return m ? parseFloat(m[1].replace(/,/g, "")) : 0;
+// Function to send update
+async function sendUpdate(channel) {
+    let updateMessage = '**Camp Update:**\n\n';
+    for (const user in membersData) {
+        const data = membersData[user];
+        updateMessage += `@${user}\n  Materials: ${data.materials}\n  Withdrawn: $${data.withdrawn.toFixed(2)}\n  Delivery: $${data.delivery.toFixed(2)}\n\n`;
+    }
+    if (updateMessage.length > 2000) {
+        updateMessage = updateMessage.slice(0, 1997) + '...';
+    }
+    await channel.send(updateMessage);
 }
 
-client.on("messageCreate", (message) => {
-  if (message.channel.id !== WEBHOOK_CHANNEL_ID) return;
-  if (message.author.bot && !message.webhookId) return;
+// Real-time listener
+client.on('messageCreate', async message => {
+    // Skip bots
+    if (message.author.bot) return;
 
-  const text = message.content;
-  const name = getPlayerName(text);
-  if (!name) return;
+    // Reset command
+    if (message.content.toLowerCase() === '!reset') {
+        membersData = {};
+        fs.writeFileSync(DATA_FILE, JSON.stringify(membersData, null, 2));
+        return message.channel.send('All data has been reset!');
+    }
 
-  if (!players[name]) {
-    players[name] = {
-      withdrawals: 0,
-      deposits: 0,
-      materials: 0,
-      deliveryMoney: 0,
-      supplyMission: 0
-    };
-  }
+    // Only monitor camp log channel
+    if (message.channel.id !== CAMP_LOG_CHANNEL_ID) return;
 
-  const matMatch = text.match(/Materials added:\s*([\d.]+)/i);
-  if (matMatch) players[name].materials += parseFloat(matMatch[1]);
+    const parsed = parseMessage(message);
+    if (!parsed) return;
 
-  if (/withdrew/i.test(text) || /withdrawal/i.test(text)) {
-    const amt = parseMoney(text);
-    if (amt) players[name].withdrawals += amt;
-  }
-
-  if (/deposited/i.test(text) || /deposit/i.test(text)) {
-    const amt = parseMoney(text);
-    if (amt) players[name].deposits += amt;
-  }
-
-  if (/made a sale/i.test(text) || /sale of/i.test(text)) {
-    const amt = parseMoney(text);
-    if (amt) players[name].deliveryMoney += amt;
-  }
-
-  if (/supply mission/i.test(text)) players[name].supplyMission += 1;
-
-  fs.writeFileSync("players.json", JSON.stringify(players, null, 2));
+    const updateChannel = await client.channels.fetch(UPDATE_CHANNEL_ID);
+    if (updateChannel) sendUpdate(updateChannel);
 });
 
-client.on("messageCreate", (message) => {
-  if (message.content === "!summary") {
-    const lines = Object.entries(players).map(([player, d]) =>
-      `${player}:\n` +
-      `- Withdrawals: $${d.withdrawals.toFixed(2)}\n` +
-      `- Deposits: $${d.deposits.toFixed(2)}\n` +
-      `- Materials: ${d.materials.toFixed(2)}\n` +
-      `- Delivery Money: $${d.deliveryMoney.toFixed(2)}\n` +
-      `- Supply Missions: ${d.supplyMission}`
-    );
-    message.channel.send(lines.join("\n\n") || "No data yet!");
-  }
-});
-
-client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
+client.once('ready', () => {
+    console.log(`Logged in as ${client.user.tag}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
+

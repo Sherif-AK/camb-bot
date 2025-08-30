@@ -1,26 +1,38 @@
 const { Client, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
-// IDs for your channels
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+    ]
+});
+
+// Replace these with your actual channel IDs
 const CAMP_LOG_CHANNEL_ID = '1410252298650783744';
 const UPDATE_CHANNEL_ID = '1411305143118336120';
 
-// Data storage
-let membersData = {};
-
-// load data from file if exists
+// File to store data
 const DATA_FILE = './membersData.json';
+
+// Load existing data if available
+let membersData = {};
 if (fs.existsSync(DATA_FILE)) {
-    membersData = JSON.parse(fs.readFileSync(DATA_FILE));
+    try {
+        membersData = JSON.parse(fs.readFileSync(DATA_FILE));
+    } catch (err) {
+        console.error('Error reading data file:', err);
+        membersData = {};
+    }
 }
 
-// Helper function to parse message
+// Parse incoming messages
 function parseMessage(message) {
     try {
         const content = message.content;
 
-        // Get discord username
+        // Extract username from the message (works for webhook messages too)
         const discordMatch = content.match(/Discord: @([^\s]+)/);
         if (!discordMatch) return null;
         const username = discordMatch[1];
@@ -47,7 +59,7 @@ function parseMessage(message) {
             membersData[username].delivery += parseFloat(deliveryMatch[1]);
         }
 
-        // Save after update
+        // Save after every update
         fs.writeFileSync(DATA_FILE, JSON.stringify(membersData, null, 2));
 
         return true;
@@ -57,32 +69,43 @@ function parseMessage(message) {
     }
 }
 
-// Function to send update
+// Send a full update to the update channel
 async function sendUpdate(channel) {
+    if (!channel) return;
+
     let updateMessage = '**Camp Update:**\n\n';
     for (const user in membersData) {
         const data = membersData[user];
         updateMessage += `@${user}\n  Materials: ${data.materials}\n  Withdrawn: $${data.withdrawn.toFixed(2)}\n  Delivery: $${data.delivery.toFixed(2)}\n\n`;
     }
+
+    // Discord message limit
     if (updateMessage.length > 2000) {
         updateMessage = updateMessage.slice(0, 1997) + '...';
     }
-    await channel.send(updateMessage);
+
+    try {
+        await channel.send(updateMessage);
+    } catch (err) {
+        console.error('Failed to send update:', err);
+    }
 }
 
 // Real-time listener
 client.on('messageCreate', async message => {
-    // Skip bots
-    if (message.author.bot) return;
+    // Skip the bot itself only
+    if (message.author?.id === client.user.id) return;
 
     // Reset command
     if (message.content.toLowerCase() === '!reset') {
         membersData = {};
         fs.writeFileSync(DATA_FILE, JSON.stringify(membersData, null, 2));
-        return message.channel.send('All data has been reset!');
+        const updateChannel = await client.channels.fetch(UPDATE_CHANNEL_ID);
+        if (updateChannel) updateChannel.send('All data has been reset!');
+        return;
     }
 
-    // Only monitor camp log channel
+    // Only process camp log channel
     if (message.channel.id !== CAMP_LOG_CHANNEL_ID) return;
 
     const parsed = parseMessage(message);
